@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Locale;
@@ -20,6 +21,7 @@ public final class GameServer {
     private static final int DEFAULT_PORT = 8080;
     private static final Instant STARTED_AT = Instant.now();
     private static final LongAdder REQUESTS = new LongAdder();
+    private static final String ADMIN_TOKEN = envOrDefault("ADMIN_TOKEN", "");
 
     private GameServer() {
     }
@@ -73,6 +75,14 @@ public final class GameServer {
         return true;
     }
 
+    private static boolean authorized(HttpExchange exchange) {
+        if (ADMIN_TOKEN.isBlank()) return true;
+        String actual = exchange.getRequestHeaders().getFirst("Authorization");
+        String expected = "Bearer " + ADMIN_TOKEN;
+        if (actual == null) return false;
+        return MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), actual.getBytes(StandardCharsets.UTF_8));
+    }
+
     private static void securityHeaders(HttpExchange exchange) {
         exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
         exchange.getResponseHeaders().set("X-Frame-Options", "DENY");
@@ -91,7 +101,6 @@ public final class GameServer {
         securityHeaders(exchange);
         exchange.getResponseHeaders().set("Content-Type", contentType);
         exchange.getResponseHeaders().set("Cache-Control", cache ? "public, max-age=3600" : "no-store");
-
         if ("HEAD".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.sendResponseHeaders(status, -1);
         } else {
@@ -143,6 +152,11 @@ public final class GameServer {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             if (!requireGet(exchange)) return;
+            if (!authorized(exchange)) {
+                exchange.getResponseHeaders().set("WWW-Authenticate", "Bearer");
+                send(exchange, 401, "application/json; charset=utf-8", "{\"error\":\"unauthorized\"}", false);
+                return;
+            }
             long uptime = Duration.between(STARTED_AT, Instant.now()).toSeconds();
             String body = "{\"requests\":" + REQUESTS.sum() + ",\"uptimeSeconds\":" + uptime
                     + ",\"processors\":" + Runtime.getRuntime().availableProcessors() + "}";
@@ -154,14 +168,12 @@ public final class GameServer {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             if (!requireGet(exchange)) return;
-
             String requestPath = exchange.getRequestURI().getPath();
             String resourcePath = "/".equals(requestPath) ? "/index.html" : requestPath;
             if (resourcePath.contains("..") || resourcePath.contains("\\") || resourcePath.indexOf('\0') >= 0) {
                 send(exchange, 400, "application/json; charset=utf-8", "{\"error\":\"bad_path\"}", false);
                 return;
             }
-
             try (InputStream stream = GameServer.class.getResourceAsStream(resourcePath)) {
                 if (stream == null) {
                     send(exchange, 404, "application/json; charset=utf-8", "{\"error\":\"not_found\"}", false);
