@@ -36,6 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           bash -n scripts/*.sh
+          ruby -e 'require "yaml"; data=YAML.load_file("render.yaml"); abort("render.yaml: services missing") unless data.is_a?(Hash) && data["services"].is_a?(Array) && !data["services"].empty?'
           cat > /tmp/prod.env <<'EOF'
           DOMAIN=game.example.com
           ACME_EMAIL=ci@example.com
@@ -55,33 +56,26 @@ jobs:
         shell: bash
         env:
           ADMIN_TOKEN: ci-admin-token
+          HOST: 0.0.0.0
+          PORT: '8080'
         run: |
           set -euo pipefail
-          java -jar target/game-sources.jar > server.log 2>&1 &
-          SERVER_PID=$!
-          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+          bash scripts/server-start.sh
+          trap 'PORT=8080 bash scripts/server-stop.sh || true' EXIT
 
-          ready=0
-          for attempt in {1..30}; do
-            if curl -fsS http://127.0.0.1:8080/ready | grep -q '"status":"UP"'; then
-              ready=1
-              break
-            fi
-            sleep 1
-          done
-          test "$ready" = "1" || { cat server.log; exit 1; }
-
-          curl -fsS http://127.0.0.1:8080/ | grep -q 'Game Sources Arena'
+          curl --retry 5 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:8080/ | grep -q 'Game Sources Arena'
           curl -fsS http://127.0.0.1:8080/static/styles.css | grep -q 'game-card'
           curl -fsS http://127.0.0.1:8080/static/game.js | grep -q 'startGame'
           curl -fsS http://127.0.0.1:8080/assets/player.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:8080/assets/enemy.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:8080/assets/gem.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:8080/assets/background.svg | grep -q '<svg'
+          curl -fsS http://127.0.0.1:8080/health | grep -q '"status":"UP"'
+          curl -fsS http://127.0.0.1:8080/ready | grep -q '"status":"UP"'
           curl -fsS http://127.0.0.1:8080/api/status | grep -q '"status":"running"'
-
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/metrics)" = "401"
           curl -fsS -H 'Authorization: Bearer ci-admin-token' http://127.0.0.1:8080/metrics | grep -q '"uptimeSeconds"'
+          PORT=8080 bash scripts/server-status.sh
 
       - name: Build Docker server image
         run: docker build -t game-sources:ci .
@@ -94,9 +88,9 @@ jobs:
           trap 'docker rm -f game-sources-ci >/dev/null 2>&1 || true' EXIT
 
           healthy=0
-          for attempt in {1..40}; do
+          for attempt in {1..60}; do
             status=$(docker inspect --format='{{.State.Health.Status}}' game-sources-ci 2>/dev/null || true)
-            if [[ "$status" == "healthy" ]] && curl -fsS http://127.0.0.1:18080/health | grep -q '"status":"UP"'; then
+            if [[ "$status" == "healthy" ]] && curl -fsS --connect-timeout 2 http://127.0.0.1:18080/health | grep -q '"status":"UP"'; then
               healthy=1
               break
             fi
@@ -119,7 +113,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist/game-server
           cp target/game-sources.jar dist/game-server/
-          cp Dockerfile compose.yml README.md LICENSE dist/game-server/
+          cp Dockerfile compose.yml render.yaml README.md LICENSE dist/game-server/
           cp -R deployment scripts docs dist/game-server/
           chmod +x dist/game-server/scripts/*.sh
           tar -C dist -czf dist/game-server-bundle.tar.gz game-server

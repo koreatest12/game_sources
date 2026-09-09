@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist/game-server
           cp target/game-sources.jar dist/game-server/
-          cp Dockerfile compose.yml README.md LICENSE dist/game-server/
+          cp Dockerfile compose.yml render.yaml README.md LICENSE dist/game-server/
           cp -R deployment scripts docs dist/game-server/
           chmod +x dist/game-server/scripts/*.sh
           tar -C dist -czf dist/game-server-bundle.tar.gz game-server

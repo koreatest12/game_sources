@@ -1,6 +1,6 @@
 # game_sources
 
-Java 21 + Maven 기반의 **실행 가능한 브라우저 게임 서버**입니다. 단순 health-check 샘플이 아니라 서버가 HTML/CSS/JavaScript/SVG 게임 리소스를 직접 제공하며, JAR·Docker·HTTPS 운영 배포와 GitHub Actions CI/CD 구성을 포함합니다.
+Java 21 + Maven 기반의 **실행 가능한 브라우저 게임 서버**입니다. 서버가 HTML/CSS/JavaScript/SVG 게임 리소스를 직접 제공하며, JAR·Docker·Render·VPS/HTTPS 운영 배포와 GitHub Actions CI/CD 구성을 포함합니다.
 
 ## Included
 
@@ -11,15 +11,15 @@ Java 21 + Maven 기반의 **실행 가능한 브라우저 게임 서버**입니�
 - `ADMIN_TOKEN` Bearer 인증 기반 metrics 보호
 - Maven 3.9.16 Wrapper + Maven dependency cache
 - 실행 JAR `target/game-sources.jar`
+- PID/로그/readiness 기반 장기 실행 시작·중지·상태 스크립트
 - Docker 이미지 + 로컬 Compose
-- 운영 Docker Compose + Caddy 자동 HTTPS
-- UFW 방화벽 스크립트
-- Ubuntu Docker 서버 설치 스크립트
+- **Render Blueprint (`render.yaml`) 기반 실제 외부 호스팅**
+- 운영 VPS Compose + Caddy 자동 HTTPS
+- UFW 방화벽 및 Ubuntu Docker 설치 스크립트
 - Ed25519 SSH 배포키 + 랜덤 ADMIN_TOKEN 생성기
 - SSH/rsync 영구 원격 배포 스크립트
-- GitHub Actions Production Deploy
-- GitHub Actions 다운로드 번들 및 Release 생성
-- SHA-256 체크섬
+- GitHub Actions Production Deploy: `auto` / `render` / `vps`
+- 다운로드 번들, Release, SHA-256 체크섬
 
 ## Project layout
 
@@ -30,14 +30,15 @@ Java 21 + Maven 기반의 **실행 가능한 브라우저 게임 서버**입니�
 │  ├─ deploy.yml
 │  └─ release.yml
 ├─ deployment/
-│  ├─ Caddyfile
-│  ├─ compose.production.yml
-│  ├─ compose.prod.yml
-│  ├─ game-sources.service
-│  └─ *.env.example
 ├─ docs/
-│  └─ DEPLOYMENT.md
+│  ├─ DEPLOYMENT.md
+│  ├─ RENDER_DEPLOYMENT.md
+│  ├─ DOWNLOADS.md
+│  └─ SECURITY.md
 ├─ scripts/
+│  ├─ server-start.sh
+│  ├─ server-stop.sh
+│  ├─ server-status.sh
 │  ├─ deploy-remote.sh
 │  ├─ firewall-ufw.sh
 │  ├─ generate-deployment-secrets.sh
@@ -45,49 +46,58 @@ Java 21 + Maven 기반의 **실행 가능한 브라우저 게임 서버**입니�
 │  └─ verify-production.sh
 ├─ src/main/java/io/github/koreatest12/game/GameServer.java
 ├─ src/main/resources/
-│  ├─ index.html
-│  ├─ static/
-│  │  ├─ game.js
-│  │  └─ styles.css
-│  └─ assets/
-│     ├─ logo.svg
-│     ├─ player.svg
-│     ├─ enemy.svg
-│     ├─ gem.svg
-│     └─ background.svg
 ├─ Dockerfile
 ├─ compose.yml
+├─ render.yaml
 ├─ pom.xml
 ├─ mvnw
 └─ mvnw.cmd
 ```
 
-## Local run — Windows
+## Build
+
+Windows:
 
 ```powershell
 .\mvnw.cmd -B -ntp clean package
 java -jar target\game-sources.jar
 ```
 
-Open `http://localhost:8080/`.
-
-## Local run — Linux/macOS
+Linux/macOS:
 
 ```bash
 sh ./mvnw -B -ntp clean package
 java -jar target/game-sources.jar
 ```
 
+Open `http://localhost:8080/`.
+
+## Resilient long-running JAR start
+
+Linux/Ubuntu/CI에서는 서버를 바로 background로 띄운 뒤 즉시 curl하지 않고 readiness까지 기다리는 스크립트를 사용할 수 있습니다.
+
+```bash
+ADMIN_TOKEN='change-me' PORT=8080 bash scripts/server-start.sh
+bash scripts/server-status.sh
+bash scripts/server-stop.sh
+```
+
+`server-start.sh`는 다음을 수행합니다.
+
+1. 기존 PID 확인
+2. JAR이 없으면 Maven package
+3. nohup으로 서버 시작
+4. 프로세스 생존 여부 확인
+5. 최대 60초 동안 `/ready` 대기
+6. 실패하면 서버 로그 출력 후 실패 처리
+
+이 방식으로 서버가 뜨기 전에 `curl 127.0.0.1:8080`이 먼저 실행되는 race condition을 방지합니다.
+
 ## Docker run
 
 ```bash
 docker compose up --build -d
 curl http://localhost:8080/health
-```
-
-Stop:
-
-```bash
 docker compose down
 ```
 
@@ -111,43 +121,42 @@ GitHub Actions uses `actions/setup-java` Maven cache keyed from `pom.xml` and ru
 sh ./mvnw -B -ntp dependency:go-offline
 ```
 
-before verification so the dependency/plugin cache is populated and reused on later runs.
+before verification so dependencies/plugins are populated and reused.
 
-## CI is a real running-server test
+## CI runs the real server
 
-`.github/workflows/maven.yml` does more than a single smoke request:
+`.github/workflows/maven.yml` performs Maven cache warm-up, `mvn verify`, Render/VPS configuration validation, real JAR startup with readiness waiting, game/API/resource/auth tests, Docker image build, real Docker health tests, and downloadable bundle generation.
 
-1. Maven dependency cache warm-up
-2. `mvn verify`
-3. Starts the real executable JAR
-4. Requests the game page, CSS, JavaScript and SVG assets
-5. Verifies health/readiness/status APIs
-6. Verifies unauthorized and authorized `/metrics`
-7. Builds the Docker image
-8. Starts the Docker container and waits for Docker health = `healthy`
-9. Tests the running Docker game server
-10. Builds a downloadable server bundle and SHA-256 file
+## Actual hosted server without PROD_HOST — Render
 
-CI servers are intentionally temporary. A 24/7 public service is deployed through the production workflow below.
+The root `render.yaml` is the simplest external hosting path. It does **not** require `PROD_HOST`, SSH, UFW, Caddy, or a custom domain.
 
-## 24/7 production deployment
+It defines a Docker web service with:
 
-See **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** for the complete server, key, DNS, HTTPS, firewall, deployment and key-rotation runbook.
+- Singapore region
+- `/ready` health check
+- public `onrender.com` subdomain
+- CI-check-aware auto deploy
+- platform-generated random `ADMIN_TOKEN`
+- dynamic Render `PORT` support
+- Free plan by default to avoid unexpected charges
 
-High-level flow:
+See **[docs/RENDER_DEPLOYMENT.md](docs/RENDER_DEPLOYMENT.md)**.
 
-```bash
-DOMAIN=game.example.com ACME_EMAIL=admin@example.com \
-  bash scripts/generate-deployment-secrets.sh
+> The Free plan is suitable for real deployment/testing but should not be treated as an always-on SLA. For continuous 24/7 production operation, explicitly upgrade the Render service to a paid instance type after accepting the cost.
 
-# bootstrap Ubuntu server
-# configure DNS A/AAAA
-# apply firewall only after confirming the SSH port
-# deploy persistently
-bash scripts/deploy-remote.sh
-```
+If an existing Render service uses a deploy hook, add GitHub production secrets:
 
-Production topology:
+- `RENDER_DEPLOY_HOOK_URL`
+- `RENDER_SERVICE_URL`
+
+Then run **Production Deploy** with target `render` or `auto`.
+
+## VPS production deployment
+
+For a user-owned Ubuntu/VPS server, see **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
+
+VPS production topology:
 
 ```text
 Internet
@@ -160,11 +169,7 @@ SSH: configurable/rate-limited
 8080: NOT publicly published
 ```
 
-Caddy terminates HTTPS and stores certificate state in persistent Docker volumes. The application and Caddy use `restart: unless-stopped` for persistent service operation across process restarts and normal host reboots after Docker starts.
-
-## GitHub production secrets
-
-The `production` environment uses:
+VPS GitHub production secrets:
 
 - `PROD_HOST`
 - `PROD_USER`
@@ -176,25 +181,19 @@ The `production` environment uses:
 
 Private key/token values must be stored as GitHub Secrets, never committed.
 
+## Production Deploy behavior
+
+The workflow supports `auto`, `render`, and `vps`.
+
+- `auto`: use configured Render deployment first, otherwise configured VPS
+- `render`: deploy using `RENDER_DEPLOY_HOOK_URL`
+- `vps`: deploy using SSH/rsync
+- no configured target: **successful preflight with a clear configuration summary**, instead of a misleading `Missing production secret: PROD_HOST` server failure
+
 ## Downloads
 
-Every successful main CI run uploads a `game-server-bundle` artifact. `Build Release` can publish versioned GitHub Releases containing:
-
-- `game-sources.jar`
-- `game-sources.jar.sha256`
-- `game-server-bundle.tar.gz`
-- `game-server-bundle.tar.gz.sha256`
-
-Verify downloaded bundles:
+Every successful main CI run uploads a `game-server-bundle` artifact containing the JAR, Docker/VPS files, Render Blueprint, scripts, docs, and SHA-256 file.
 
 ```bash
 sha256sum -c game-server-bundle.tar.gz.sha256
 ```
-
-## Production verification
-
-```bash
-DOMAIN=game.example.com ADMIN_TOKEN='your-token' bash scripts/verify-production.sh
-```
-
-This validates DNS visibility, TLS/headers, health, readiness, runtime status, game assets and authenticated metrics.
