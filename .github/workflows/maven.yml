@@ -17,12 +17,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Set up Java 21
+      - name: Set up Java 21 with Maven cache
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
           cache: maven
+          cache-dependency-path: pom.xml
 
-      - name: Verify with Maven Wrapper
+      - name: Warm Maven dependency cache
+        run: sh ./mvnw -B -ntp dependency:go-offline
+
+      - name: Verify and package
         run: sh ./mvnw -B -ntp verify
+
+      - name: Smoke test HTTP server
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -jar target/game-sources.jar > server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8080/health | grep -q '"status":"UP"'; then
+              echo "HTTP server health check passed"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "Server did not become healthy"
+          cat server.log
+          exit 1
