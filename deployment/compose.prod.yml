@@ -1,0 +1,60 @@
+services:
+  game-server:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ${GAME_IMAGE:-game-sources:prod}
+    container_name: game-sources-app
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8080
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=75}
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks:
+      - private
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: game-sources-caddy
+    restart: unless-stopped
+    depends_on:
+      game-server:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is required}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL is required}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - public
+      - private
+
+networks:
+  public:
+  private:
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:
