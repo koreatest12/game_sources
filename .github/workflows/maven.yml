@@ -31,6 +31,26 @@ jobs:
       - name: Verify and package
         run: sh ./mvnw -B -ntp verify
 
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/*.sh
+          cat > /tmp/prod.env <<'EOF'
+          DOMAIN=game.example.com
+          ACME_EMAIL=ci@example.com
+          ADMIN_TOKEN=ci-admin-token
+          GAME_IMAGE=game-sources:prod
+          JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75
+          SSH_PORT=22
+          EOF
+          docker compose --env-file /tmp/prod.env -f deployment/compose.production.yml config >/tmp/compose.rendered.yml
+          docker run --rm \
+            -e DOMAIN=game.example.com \
+            -e ACME_EMAIL=ci@example.com \
+            -v "$PWD/deployment/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+
       - name: Run live JAR integration tests
         shell: bash
         env:
