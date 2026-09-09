@@ -40,12 +40,12 @@ jobs:
           mkdir -p dist/game-server
           cp target/game-sources.jar dist/game-server/
           cp Dockerfile compose.yml README.md LICENSE dist/game-server/
-          cp -R deployment scripts dist/game-server/
+          cp -R deployment scripts docs dist/game-server/
           chmod +x dist/game-server/scripts/*.sh
           tar -C dist -czf dist/game-server-bundle.tar.gz game-server
-          sha256sum dist/game-server-bundle.tar.gz > dist/game-server-bundle.tar.gz.sha256
           cp target/game-sources.jar dist/game-sources.jar
-          sha256sum dist/game-sources.jar > dist/game-sources.jar.sha256
+          (cd dist && sha256sum game-server-bundle.tar.gz > game-server-bundle.tar.gz.sha256)
+          (cd dist && sha256sum game-sources.jar > game-sources.jar.sha256)
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
