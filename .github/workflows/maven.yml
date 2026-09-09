@@ -50,3 +50,6 @@ jobs:
           echo "Server did not become healthy"
           cat server.log
           exit 1
+
+      - name: Build Docker server image
+        run: docker build -t game-sources:ci .
