@@ -2,6 +2,16 @@ name: Production Deploy
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - render
+          - vps
 
 permissions:
   contents: read
@@ -11,27 +21,139 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  preflight:
     runs-on: ubuntu-latest
-    environment: production
-
+    outputs:
+      target: ${{ steps.detect.outputs.target }}
+      ready: ${{ steps.detect.outputs.ready }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Validate required secrets
+      - name: Detect configured deployment target
+        id: detect
         env:
+          REQUESTED_TARGET: ${{ inputs.target }}
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_USER: ${{ secrets.PROD_USER }}
           PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
           PROD_DOMAIN: ${{ secrets.PROD_DOMAIN }}
           ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL }}
+        shell: bash
         run: |
           set -euo pipefail
+
+          requested="${REQUESTED_TARGET:-auto}"
+          vps_ready=true
+          render_ready=true
+          vps_missing=()
+          render_missing=()
+
           for name in PROD_HOST PROD_USER PROD_SSH_KEY PROD_DOMAIN ACME_EMAIL ADMIN_TOKEN; do
-            test -n "${!name:-}" || { echo "Missing production secret: $name" >&2; exit 1; }
+            if [[ -z "${!name:-}" ]]; then
+              vps_ready=false
+              vps_missing+=("$name")
+            fi
           done
+
+          for name in RENDER_DEPLOY_HOOK_URL RENDER_SERVICE_URL; do
+            if [[ -z "${!name:-}" ]]; then
+              render_ready=false
+              render_missing+=("$name")
+            fi
+          done
+
+          target=none
+          ready=false
+          case "$requested" in
+            render)
+              if [[ "$render_ready" == true ]]; then target=render; ready=true; fi
+              ;;
+            vps)
+              if [[ "$vps_ready" == true ]]; then target=vps; ready=true; fi
+              ;;
+            auto)
+              if [[ "$render_ready" == true ]]; then
+                target=render; ready=true
+              elif [[ "$vps_ready" == true ]]; then
+                target=vps; ready=true
+              fi
+              ;;
+            *)
+              echo "Unsupported target: $requested" >&2
+              exit 2
+              ;;
+          esac
+
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Production deploy preflight"
+            echo
+            echo "- Requested target: \`$requested\`"
+            echo "- Selected target: \`$target\`"
+            echo "- Deployment configured: \`$ready\`"
+            if [[ "$ready" != true ]]; then
+              echo
+              echo "No external server credentials are configured, so this run will not report a false deployment failure."
+              [[ ${#render_missing[@]} -eq 0 ]] || echo "- Render missing: ${render_missing[*]}"
+              [[ ${#vps_missing[@]} -eq 0 ]] || echo "- VPS missing: ${vps_missing[*]}"
+              echo "- A Render Blueprint is available at \`render.yaml\` and does not require \`PROD_HOST\`."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  not-configured:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.ready != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deployment configuration required
+        run: |
+          echo "External deployment was not attempted because no configured target is available."
+          echo "Connect/create the Render service from render.yaml or configure the VPS production secrets."
+          echo "This is a successful preflight, not a server crash."
+
+  deploy-render:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.target == 'render' && needs.preflight.outputs.ready == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Trigger Render deployment
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --request POST "$RENDER_DEPLOY_HOOK_URL" > render-deploy-response.json
+          cat render-deploy-response.json
+
+      - name: Wait for public Render service
+        env:
+          RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL }}
+        run: |
+          set -euo pipefail
+          base="${RENDER_SERVICE_URL%/}"
+          for attempt in {1..120}; do
+            if curl --fail --silent --connect-timeout 5 --max-time 10 "$base/ready" | grep -q '"status":"UP"'; then
+              curl --fail --silent "$base/" | grep -q 'Game Sources Arena'
+              curl --fail --silent "$base/health" | grep -q '"status":"UP"'
+              echo "Render production service is live at $base"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Render service did not become ready within 10 minutes" >&2
+          exit 1
+
+  deploy-vps:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.target == 'vps' && needs.preflight.outputs.ready == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
 
       - name: Prepare SSH key
         env:
@@ -42,27 +164,27 @@ jobs:
           printf '%s\n' "$PROD_SSH_KEY_VALUE" > "$HOME/.ssh/game_sources_deploy"
           chmod 600 "$HOME/.ssh/game_sources_deploy"
 
-      - name: Deploy persistent production server
+      - name: Deploy persistent VPS production server
         env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_USER: ${{ secrets.PROD_USER }}
-          PROD_SSH_KEY: ${{ runner.temp }}/../.ssh/game_sources_deploy
           DOMAIN: ${{ secrets.PROD_DOMAIN }}
           ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
-          SSH_PORT: ${{ secrets.PROD_SSH_PORT || '22' }}
+          PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
         shell: bash
         run: |
           set -euo pipefail
           export PROD_SSH_KEY="$HOME/.ssh/game_sources_deploy"
+          export SSH_PORT="${PROD_SSH_PORT:-22}"
           bash scripts/deploy-remote.sh
 
-      - name: Verify public production service
+      - name: Verify public VPS production service
         env:
           DOMAIN: ${{ secrets.PROD_DOMAIN }}
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
         run: |
           set -euo pipefail
-          curl --fail --show-error --silent --retry 6 --retry-delay 5 "https://$DOMAIN/health" | grep -q '"status":"UP"'
+          curl --fail --show-error --silent --retry 12 --retry-connrefused --retry-delay 5 "https://$DOMAIN/health" | grep -q '"status":"UP"'
           curl --fail --show-error --silent "https://$DOMAIN/" | grep -q 'Game Sources Arena'
           curl --fail --show-error --silent -H "Authorization: Bearer $ADMIN_TOKEN" "https://$DOMAIN/metrics" | grep -q '"uptimeSeconds"'
