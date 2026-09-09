@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: game-sources
+    runtime: docker
+    repo: https://github.com/koreatest12/game_sources
+    branch: main
+    plan: free
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    autoDeployTrigger: checksPass
+    healthCheckPath: /ready
+    maxShutdownDelaySeconds: 30
+    renderSubdomainPolicy: enabled
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: JAVA_TOOL_OPTIONS
+        value: -XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError
