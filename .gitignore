@@ -21,6 +21,9 @@ deployment/prod.env
 id_rsa*
 id_ed25519*
 
+# Runtime state
+.run/
+
 # Logs and temporary files
 *.log
 *.tmp
