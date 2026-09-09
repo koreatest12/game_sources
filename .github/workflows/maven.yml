@@ -31,8 +31,10 @@ jobs:
       - name: Verify and package
         run: sh ./mvnw -B -ntp verify
 
-      - name: Smoke test HTTP server
+      - name: Run live JAR integration tests
         shell: bash
+        env:
+          ADMIN_TOKEN: ci-admin-token
         run: |
           set -euo pipefail
           java -jar target/game-sources.jar > server.log 2>&1 &
@@ -40,16 +42,57 @@ jobs:
           trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
 
           for attempt in {1..30}; do
-            if curl --fail --silent http://127.0.0.1:8080/health | grep -q '"status":"UP"'; then
-              echo "HTTP server health check passed"
-              exit 0
-            fi
+            curl -fsS http://127.0.0.1:8080/ready | grep -q '"status":"UP"' && break
             sleep 1
           done
 
-          echo "Server did not become healthy"
-          cat server.log
-          exit 1
+          curl -fsS http://127.0.0.1:8080/ | grep -q 'Game Sources Arena'
+          curl -fsS http://127.0.0.1:8080/static/styles.css | grep -q 'game-card'
+          curl -fsS http://127.0.0.1:8080/static/game.js | grep -q 'startGame'
+          curl -fsS http://127.0.0.1:8080/assets/player.svg | grep -q '<svg'
+          curl -fsS http://127.0.0.1:8080/assets/enemy.svg | grep -q '<svg'
+          curl -fsS http://127.0.0.1:8080/assets/gem.svg | grep -q '<svg'
+          curl -fsS http://127.0.0.1:8080/api/status | grep -q '"status":"running"'
+
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/metrics)" = "401"
+          curl -fsS -H 'Authorization: Bearer ci-admin-token' http://127.0.0.1:8080/metrics | grep -q '"uptimeSeconds"'
 
       - name: Build Docker server image
         run: docker build -t game-sources:ci .
+
+      - name: Run live Docker integration tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name game-sources-ci -p 18080:8080 -e ADMIN_TOKEN=ci-admin-token game-sources:ci
+          trap 'docker rm -f game-sources-ci >/dev/null 2>&1 || true' EXIT
+
+          for attempt in {1..30}; do
+            curl -fsS http://127.0.0.1:18080/health | grep -q '"status":"UP"' && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/ | grep -q 'Game Sources Arena'
+          curl -fsS http://127.0.0.1:18080/assets/background.svg | grep -q '<svg'
+          test "$(docker inspect --format='{{.State.Health.Status}}' game-sources-ci)" = "healthy"
+
+      - name: Build downloadable server bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/game-server
+          cp target/game-sources.jar dist/game-server/
+          cp Dockerfile compose.yml README.md LICENSE dist/game-server/
+          cp -R deployment scripts dist/game-server/
+          chmod +x dist/game-server/scripts/*.sh
+          tar -C dist -czf dist/game-server-bundle.tar.gz game-server
+          sha256sum dist/game-server-bundle.tar.gz > dist/game-server-bundle.tar.gz.sha256
+
+      - name: Upload server bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: game-server-bundle
+          path: |
+            dist/game-server-bundle.tar.gz
+            dist/game-server-bundle.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 30
