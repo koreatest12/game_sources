@@ -21,7 +21,7 @@ EXPOSE 8080
 ENV HOST=0.0.0.0
 ENV PORT=8080
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=5s --timeout=3s --start-period=3s --retries=5 \
   CMD curl -fsS http://127.0.0.1:8080/health | grep -q '"status":"UP"' || exit 1
 
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-XX:+ExitOnOutOfMemoryError", "-jar", "/app/game-sources.jar"]

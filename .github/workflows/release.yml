@@ -1,0 +1,80 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, for example v1.0.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Java 21 with Maven cache
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: pom.xml
+
+      - name: Build verified JAR
+        run: sh ./mvnw -B -ntp clean verify
+
+      - name: Build release bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/game-server
+          cp target/game-sources.jar dist/game-server/
+          cp Dockerfile compose.yml README.md LICENSE dist/game-server/
+          cp -R deployment scripts dist/game-server/
+          chmod +x dist/game-server/scripts/*.sh
+          tar -C dist -czf dist/game-server-bundle.tar.gz game-server
+          sha256sum dist/game-server-bundle.tar.gz > dist/game-server-bundle.tar.gz.sha256
+          cp target/game-sources.jar dist/game-sources.jar
+          sha256sum dist/game-sources.jar > dist/game-sources.jar.sha256
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: game-sources-release
+          path: |
+            dist/game-server-bundle.tar.gz
+            dist/game-server-bundle.tar.gz.sha256
+            dist/game-sources.jar
+            dist/game-sources.jar.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            VERSION="$GITHUB_REF_NAME"
+          else
+            VERSION="$INPUT_VERSION"
+          fi
+          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || { echo "Invalid version: $VERSION" >&2; exit 2; }
+
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            gh release upload "$VERSION" dist/game-server-bundle.tar.gz dist/game-server-bundle.tar.gz.sha256 dist/game-sources.jar dist/game-sources.jar.sha256 --clobber
+          else
+            gh release create "$VERSION" dist/game-server-bundle.tar.gz dist/game-server-bundle.tar.gz.sha256 dist/game-sources.jar dist/game-sources.jar.sha256 --target "$GITHUB_SHA" --generate-notes --title "Game Sources $VERSION"
+          fi
