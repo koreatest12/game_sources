@@ -41,10 +41,15 @@ jobs:
           SERVER_PID=$!
           trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
 
+          ready=0
           for attempt in {1..30}; do
-            curl -fsS http://127.0.0.1:8080/ready | grep -q '"status":"UP"' && break
+            if curl -fsS http://127.0.0.1:8080/ready | grep -q '"status":"UP"'; then
+              ready=1
+              break
+            fi
             sleep 1
           done
+          test "$ready" = "1" || { cat server.log; exit 1; }
 
           curl -fsS http://127.0.0.1:8080/ | grep -q 'Game Sources Arena'
           curl -fsS http://127.0.0.1:8080/static/styles.css | grep -q 'game-card'
@@ -52,6 +57,7 @@ jobs:
           curl -fsS http://127.0.0.1:8080/assets/player.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:8080/assets/enemy.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:8080/assets/gem.svg | grep -q '<svg'
+          curl -fsS http://127.0.0.1:8080/assets/background.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:8080/api/status | grep -q '"status":"running"'
 
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/metrics)" = "401"
@@ -67,12 +73,24 @@ jobs:
           docker run -d --name game-sources-ci -p 18080:8080 -e ADMIN_TOKEN=ci-admin-token game-sources:ci
           trap 'docker rm -f game-sources-ci >/dev/null 2>&1 || true' EXIT
 
-          for attempt in {1..30}; do
-            curl -fsS http://127.0.0.1:18080/health | grep -q '"status":"UP"' && break
+          healthy=0
+          for attempt in {1..40}; do
+            status=$(docker inspect --format='{{.State.Health.Status}}' game-sources-ci 2>/dev/null || true)
+            if [[ "$status" == "healthy" ]] && curl -fsS http://127.0.0.1:18080/health | grep -q '"status":"UP"'; then
+              healthy=1
+              break
+            fi
             sleep 1
           done
+          if [[ "$healthy" != "1" ]]; then
+            docker inspect game-sources-ci || true
+            docker logs game-sources-ci || true
+            exit 1
+          fi
+
           curl -fsS http://127.0.0.1:18080/ | grep -q 'Game Sources Arena'
           curl -fsS http://127.0.0.1:18080/assets/background.svg | grep -q '<svg'
+          curl -fsS http://127.0.0.1:18080/static/game.js | grep -q 'startGame'
           test "$(docker inspect --format='{{.State.Health.Status}}' game-sources-ci)" = "healthy"
 
       - name: Build downloadable server bundle
@@ -82,7 +100,7 @@ jobs:
           mkdir -p dist/game-server
           cp target/game-sources.jar dist/game-server/
           cp Dockerfile compose.yml README.md LICENSE dist/game-server/
-          cp -R deployment scripts dist/game-server/
+          cp -R deployment scripts docs dist/game-server/
           chmod +x dist/game-server/scripts/*.sh
           tar -C dist -czf dist/game-server-bundle.tar.gz game-server
           sha256sum dist/game-server-bundle.tar.gz > dist/game-server-bundle.tar.gz.sha256
