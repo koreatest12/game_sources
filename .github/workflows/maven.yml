@@ -123,7 +123,7 @@ jobs:
           cp -R deployment scripts docs dist/game-server/
           chmod +x dist/game-server/scripts/*.sh
           tar -C dist -czf dist/game-server-bundle.tar.gz game-server
-          sha256sum dist/game-server-bundle.tar.gz > dist/game-server-bundle.tar.gz.sha256
+          (cd dist && sha256sum game-server-bundle.tar.gz > game-server-bundle.tar.gz.sha256)
 
       - name: Upload server bundle
         uses: actions/upload-artifact@v7
