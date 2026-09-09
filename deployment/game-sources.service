@@ -1,0 +1,31 @@
+[Unit]
+Description=Game Sources Java Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gameserver
+Group=gameserver
+WorkingDirectory=/opt/game-sources
+EnvironmentFile=-/etc/game-sources/game-sources.env
+ExecStart=/usr/bin/java -XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError -jar /opt/game-sources/game-sources.jar
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+SuccessExitStatus=143
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/log/game-sources
+
+[Install]
+WantedBy=multi-user.target

@@ -1,25 +1,51 @@
 <!doctype html>
 <html lang="ko">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>game_sources server</title>
-    <style>
-        body { font-family: system-ui, sans-serif; margin: 0; background: #111827; color: #f9fafb; }
-        main { max-width: 760px; margin: 12vh auto; padding: 32px; }
-        .card { background: #1f2937; border-radius: 18px; padding: 32px; box-shadow: 0 20px 50px rgba(0,0,0,.25); }
-        code { background: #374151; padding: 3px 7px; border-radius: 6px; }
-        a { color: #93c5fd; }
-    </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111827">
+  <title>Game Sources Arena</title>
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-<main>
-    <section class="card">
-        <h1>game_sources server</h1>
-        <p>Java 21 + Maven 기반 HTTP 서버가 정상 실행 중입니다.</p>
-        <p>Health check: <a href="/health"><code>/health</code></a></p>
-        <p>Server status: <a href="/api/status"><code>/api/status</code></a></p>
+  <main class="shell">
+    <header class="hero">
+      <img class="logo" src="/assets/logo.svg" alt="Game Sources Arena">
+      <div>
+        <p class="eyebrow">JAVA 21 · MAVEN · LIVE SERVER</p>
+        <h1>Game Sources Arena</h1>
+        <p>보석을 모으고 적을 피하세요. WASD 또는 방향키로 이동합니다.</p>
+      </div>
+    </header>
+
+    <section class="statusbar" aria-label="게임 상태">
+      <span>점수 <strong id="score">0</strong></span>
+      <span>생명 <strong id="lives">3</strong></span>
+      <span>최고점수 <strong id="best">0</strong></span>
+      <span id="server-state" class="server-state">서버 확인 중…</span>
     </section>
-</main>
+
+    <section class="game-card">
+      <canvas id="game" width="960" height="540" aria-label="Game Sources Arena 게임 화면"></canvas>
+      <div id="overlay" class="overlay">
+        <h2 id="overlay-title">Game Sources Arena</h2>
+        <p id="overlay-copy">보석을 모으고 적과 충돌하지 마세요.</p>
+        <button id="start" type="button">게임 시작</button>
+      </div>
+    </section>
+
+    <section class="help">
+      <div><kbd>WASD</kbd> / <kbd>방향키</kbd><span>이동</span></div>
+      <div><kbd>SPACE</kbd><span>일시정지</span></div>
+      <div><kbd>R</kbd><span>재시작</span></div>
+    </section>
+
+    <footer>
+      <a href="/health">Health</a>
+      <a href="/api/status">API Status</a>
+      <a href="/metrics">Metrics</a>
+    </footer>
+  </main>
+  <script src="/static/game.js" defer></script>
 </body>
 </html>
