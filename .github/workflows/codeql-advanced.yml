@@ -7,6 +7,7 @@ on:
     branches: [ "main" ]
   schedule:
     - cron: '23 8 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,6 +19,7 @@ jobs:
   game-preflight:
     name: Astra Fly DOOM operational preflight
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
@@ -62,36 +64,60 @@ jobs:
           FILE_STORAGE_DIR: ${{ runner.temp }}/codeql-game-files
           MAX_UPLOAD_BYTES: '1048576'
           FILE_PUBLIC_DOWNLOADS: 'false'
+          RUN_DIR: ${{ runner.temp }}/codeql-game-run
+          LOG_FILE: ${{ runner.temp }}/codeql-game-server.log
         run: |
           set -euo pipefail
-          java -jar target/game-sources.jar >/tmp/astra-game-server.log 2>&1 &
-          server_pid=$!
+
+          rm -rf "$RUN_DIR" "$FILE_STORAGE_DIR"
+          mkdir -p "$RUN_DIR" "$FILE_STORAGE_DIR"
 
           cleanup() {
-            kill "$server_pid" >/dev/null 2>&1 || true
-            wait "$server_pid" >/dev/null 2>&1 || true
+            RUN_DIR="$RUN_DIR" PORT="$PORT" bash scripts/server-stop.sh >/dev/null 2>&1 || true
           }
-          trap cleanup EXIT
 
-          ready=0
-          for attempt in {1..30}; do
-            if curl -fsS --connect-timeout 2 http://127.0.0.1:18080/health | grep -q '"status":"UP"'; then
-              ready=1
-              break
+          diagnostics() {
+            echo '--- Astra game server log ---'
+            cat "$LOG_FILE" 2>/dev/null || true
+            echo '--- Listening TCP sockets ---'
+            ss -ltnp 2>/dev/null || true
+            echo '--- Java processes ---'
+            ps -ef | grep '[j]ava' || true
+          }
+
+          on_exit() {
+            status=$?
+            if [[ "$status" -ne 0 ]]; then
+              diagnostics
             fi
-            sleep 1
-          done
+            cleanup
+            exit "$status"
+          }
+          trap on_exit EXIT
 
-          if [[ "$ready" != "1" ]]; then
-            cat /tmp/astra-game-server.log || true
-            exit 1
-          fi
+          # Use the repository's common launcher. It verifies that the JVM stays
+          # alive, waits for /ready, and prints the server log on startup failure.
+          bash scripts/server-start.sh
 
-          curl -fsS http://127.0.0.1:18080/astra-fly-doom/ | grep -q '초파리 무한 DOOM'
-          curl -fsS http://127.0.0.1:18080/astra-fly-doom/game.js | grep -q 'chooseAction'
-          curl -fsS http://127.0.0.1:18080/astra-fly-doom/styles.css | grep -q 'game-panel'
-          curl -fsS http://127.0.0.1:18080/ | grep -q '/astra-fly-doom/'
-          curl -fsS http://127.0.0.1:18080/api/status | grep -q '"astraFlyDoom":true'
+          base_url="http://127.0.0.1:${PORT}"
+          curl_retry=(
+            curl
+            --fail
+            --silent
+            --show-error
+            --retry 5
+            --retry-all-errors
+            --retry-delay 1
+            --connect-timeout 2
+            --max-time 10
+          )
+
+          "${curl_retry[@]}" "$base_url/health" | grep -q '"status":"UP"'
+          "${curl_retry[@]}" "$base_url/astra-fly-doom/" | grep -q '초파리 무한 DOOM'
+          "${curl_retry[@]}" "$base_url/astra-fly-doom/game.js" | grep -q 'chooseAction'
+          "${curl_retry[@]}" "$base_url/astra-fly-doom/styles.css" | grep -q 'game-panel'
+          "${curl_retry[@]}" "$base_url/" | grep -q '/astra-fly-doom/'
+          "${curl_retry[@]}" "$base_url/api/status" | grep -q '"astraFlyDoom":true'
 
   analyze:
     name: Analyze (${{ matrix.language }})
