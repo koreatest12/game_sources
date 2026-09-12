@@ -22,6 +22,7 @@ rsync -az --delete \
   --exclude 'target/' \
   --exclude '.local-secrets/' \
   --exclude 'deployment/prod.env' \
+  --exclude 'data/files/' \
   -e "$RSYNC_RSH" \
   "$ROOT_DIR/" "$PROD_USER@$PROD_HOST:$REMOTE_DIR/"
 
@@ -32,6 +33,8 @@ cat > "$ENV_FILE" <<EOF
 DOMAIN=$DOMAIN
 ACME_EMAIL=$ACME_EMAIL
 ADMIN_TOKEN=$ADMIN_TOKEN
+MAX_UPLOAD_BYTES=${MAX_UPLOAD_BYTES:-104857600}
+FILE_PUBLIC_DOWNLOADS=${FILE_PUBLIC_DOWNLOADS:-false}
 GAME_IMAGE=${GAME_IMAGE:-game-sources:prod}
 JAVA_TOOL_OPTIONS=${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError}
 SSH_PORT=$SSH_PORT

@@ -29,6 +29,7 @@ public final class GameServer {
     public static void main(String[] args) throws IOException {
         String host = envOrDefault("HOST", DEFAULT_HOST);
         int port = parsePort(envOrDefault("PORT", Integer.toString(DEFAULT_PORT)));
+        FileTransferService fileTransferService = FileTransferService.fromEnvironment();
 
         HttpServer server = HttpServer.create(new InetSocketAddress(host, port), 128);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -38,6 +39,7 @@ public final class GameServer {
         server.createContext("/ready", new HealthHandler());
         server.createContext("/api/status", new StatusHandler());
         server.createContext("/metrics", new MetricsHandler());
+        fileTransferService.register(server);
         server.createContext("/", new StaticResourceHandler());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -47,6 +49,8 @@ public final class GameServer {
 
         server.start();
         System.out.printf("game_sources server started on http://%s:%d%n", host, port);
+        System.out.printf("file transfer storage: %s (max upload: %d bytes, public downloads: %s)%n",
+                fileTransferService.storageDirectory(), fileTransferService.maxUploadBytes(), fileTransferService.publicDownloads());
     }
 
     private static String envOrDefault(String name, String defaultValue) {
@@ -57,9 +61,7 @@ public final class GameServer {
     private static int parsePort(String value) {
         try {
             int port = Integer.parseInt(value);
-            if (port < 1 || port > 65535) {
-                throw new IllegalArgumentException("PORT must be between 1 and 65535");
-            }
+            if (port < 1 || port > 65535) throw new IllegalArgumentException("PORT must be between 1 and 65535");
             return port;
         } catch (NumberFormatException ex) {
             throw new IllegalArgumentException("PORT must be a number", ex);
@@ -79,8 +81,7 @@ public final class GameServer {
         if (ADMIN_TOKEN.isBlank()) return true;
         String actual = exchange.getRequestHeaders().getFirst("Authorization");
         String expected = "Bearer " + ADMIN_TOKEN;
-        if (actual == null) return false;
-        return MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), actual.getBytes(StandardCharsets.UTF_8));
+        return actual != null && MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8), actual.getBytes(StandardCharsets.UTF_8));
     }
 
     private static void securityHeaders(HttpExchange exchange) {
@@ -88,8 +89,7 @@ public final class GameServer {
         exchange.getResponseHeaders().set("X-Frame-Options", "DENY");
         exchange.getResponseHeaders().set("Referrer-Policy", "no-referrer");
         exchange.getResponseHeaders().set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
-        exchange.getResponseHeaders().set("Content-Security-Policy",
-                "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
+        exchange.getResponseHeaders().set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
     }
 
     private static void send(HttpExchange exchange, int status, String contentType, String body, boolean cache) throws IOException {
@@ -102,6 +102,7 @@ public final class GameServer {
         exchange.getResponseHeaders().set("Content-Type", contentType);
         exchange.getResponseHeaders().set("Cache-Control", cache ? "public, max-age=3600" : "no-store");
         if ("HEAD".equalsIgnoreCase(exchange.getRequestMethod())) {
+            exchange.getResponseHeaders().set("Content-Length", Integer.toString(bytes.length));
             exchange.sendResponseHeaders(status, -1);
         } else {
             exchange.sendResponseHeaders(status, bytes.length);
@@ -129,28 +130,24 @@ public final class GameServer {
     }
 
     private static final class HealthHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
+        @Override public void handle(HttpExchange exchange) throws IOException {
             if (!requireGet(exchange)) return;
             send(exchange, 200, "application/json; charset=utf-8", "{\"status\":\"UP\"}", false);
         }
     }
 
     private static final class StatusHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
+        @Override public void handle(HttpExchange exchange) throws IOException {
             if (!requireGet(exchange)) return;
             long uptime = Duration.between(STARTED_AT, Instant.now()).toSeconds();
-            String body = "{\"service\":\"game_sources\",\"status\":\"running\",\"startedAt\":\""
-                    + jsonEscape(STARTED_AT.toString()) + "\",\"uptimeSeconds\":" + uptime
-                    + ",\"java\":\"" + jsonEscape(System.getProperty("java.version")) + "\"}";
+            String body = "{\"service\":\"game_sources\",\"status\":\"running\",\"startedAt\":\"" + jsonEscape(STARTED_AT.toString())
+                    + "\",\"uptimeSeconds\":" + uptime + ",\"java\":\"" + jsonEscape(System.getProperty("java.version")) + "\",\"fileTransfer\":true}";
             send(exchange, 200, "application/json; charset=utf-8", body, false);
         }
     }
 
     private static final class MetricsHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
+        @Override public void handle(HttpExchange exchange) throws IOException {
             if (!requireGet(exchange)) return;
             if (!authorized(exchange)) {
                 exchange.getResponseHeaders().set("WWW-Authenticate", "Bearer");
@@ -158,15 +155,13 @@ public final class GameServer {
                 return;
             }
             long uptime = Duration.between(STARTED_AT, Instant.now()).toSeconds();
-            String body = "{\"requests\":" + REQUESTS.sum() + ",\"uptimeSeconds\":" + uptime
-                    + ",\"processors\":" + Runtime.getRuntime().availableProcessors() + "}";
+            String body = "{\"requests\":" + REQUESTS.sum() + ",\"uptimeSeconds\":" + uptime + ",\"processors\":" + Runtime.getRuntime().availableProcessors() + "}";
             send(exchange, 200, "application/json; charset=utf-8", body, false);
         }
     }
 
     private static final class StaticResourceHandler implements HttpHandler {
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
+        @Override public void handle(HttpExchange exchange) throws IOException {
             if (!requireGet(exchange)) return;
             String requestPath = exchange.getRequestURI().getPath();
             String resourcePath = "/".equals(requestPath) ? "/index.html" : requestPath;
