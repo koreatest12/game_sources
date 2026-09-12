@@ -17,7 +17,7 @@
     -Server
   }
 
-  reverse_proxy game-server:8080 {
+  reverse_proxy apache:8080 {
     health_uri /health
     health_interval 15s
     health_timeout 3s
