@@ -12,8 +12,8 @@ services:
       FILE_STORAGE_DIR: /data/files
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-104857600}
       FILE_PUBLIC_DOWNLOADS: ${FILE_PUBLIC_DOWNLOADS:-false}
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
     volumes:
       - file_data:/data/files
     healthcheck:
@@ -22,6 +22,26 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+
+  apache:
+    build:
+      context: ./deployment/apache
+    image: game-sources-apache:local
+    container_name: game-sources-apache
+    restart: unless-stopped
+    depends_on:
+      game-server:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/health | grep -q '\"status\":\"UP\"'"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
 
 volumes:
   file_data:
