@@ -18,6 +18,16 @@
 
     <build>
         <finalName>game-sources</finalName>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>astra-fly-doom</directory>
+                <targetPath>astra-fly-doom</targetPath>
+                <filtering>false</filtering>
+            </resource>
+        </resources>
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
