@@ -6,7 +6,7 @@ RUN mvn -B -ntp dependency:go-offline
 COPY src ./src
 RUN mvn -B -ntp clean package
 
-FROM eclipse-temurin:21-jre
+FROM eclipse-temurin:25-jre
 WORKDIR /app
 
 RUN apt-get update \
