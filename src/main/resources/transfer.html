@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f172a">
+  <title>Game Sources File Transfer</title>
+  <link rel="stylesheet" href="/static/transfer.css">
+</head>
+<body>
+  <main class="transfer-shell">
+    <header class="transfer-hero">
+      <div>
+        <p class="eyebrow">SECURE FILE TRANSFER</p>
+        <h1>Game Sources File Transfer</h1>
+        <p>파일을 서버에 생성·업로드하고, 목록/체크섬을 확인한 뒤 다운로드하거나 삭제할 수 있습니다.</p>
+      </div>
+      <a class="secondary-button" href="/">게임 화면</a>
+    </header>
+
+    <section class="panel auth-panel">
+      <div><h2>관리 토큰</h2><p>서버의 <code>ADMIN_TOKEN</code> 값을 입력하세요. 브라우저 저장소에는 기록하지 않습니다.</p></div>
+      <div class="token-row"><input id="admin-token" type="password" autocomplete="off" placeholder="ADMIN_TOKEN"><button id="refresh" type="button">파일 목록 새로고침</button></div>
+    </section>
+
+    <section class="panel">
+      <h2>파일 업로드</h2>
+      <div id="drop-zone" class="drop-zone" tabindex="0">
+        <strong>파일을 끌어놓거나 선택하세요.</strong><span id="selected-file">선택된 파일 없음</span><input id="file-input" type="file">
+      </div>
+      <button id="upload" type="button">선택 파일 전송</button>
+    </section>
+
+    <section class="panel">
+      <h2>텍스트 파일 생성</h2>
+      <div class="create-grid">
+        <label>파일 이름<input id="text-name" type="text" maxlength="180" placeholder="release-note.txt"></label>
+        <label class="wide">파일 내용<textarea id="text-content" rows="8" placeholder="서버에서 생성할 텍스트 내용을 입력하세요."></textarea></label>
+      </div>
+      <button id="create-text" type="button">텍스트 파일 생성/덮어쓰기</button>
+    </section>
+
+    <section class="panel">
+      <div class="section-title-row"><div><h2>서버 파일</h2><p id="limit-info">업로드 한도 확인 전</p></div><span id="file-count" class="pill">0 files</span></div>
+      <div class="table-wrap"><table><thead><tr><th>이름</th><th>크기</th><th>수정 시각</th><th>SHA-256</th><th>작업</th></tr></thead><tbody id="file-list"><tr><td colspan="5" class="empty">관리 토큰을 입력하고 목록을 새로고침하세요.</td></tr></tbody></table></div>
+    </section>
+
+    <div id="status" class="status" role="status" aria-live="polite">준비됨</div>
+  </main>
+  <script src="/static/transfer.js" defer></script>
+</body>
+</html>
