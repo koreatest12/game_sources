@@ -8,7 +8,7 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8080
-      ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me-local}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?ADMIN_TOKEN is required}
       FILE_STORAGE_DIR: /data/files
       MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-104857600}
       FILE_PUBLIC_DOWNLOADS: ${FILE_PUBLIC_DOWNLOADS:-false}
