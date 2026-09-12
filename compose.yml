@@ -8,11 +8,20 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8080
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-change-me-local}
+      FILE_STORAGE_DIR: /data/files
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-104857600}
+      FILE_PUBLIC_DOWNLOADS: ${FILE_PUBLIC_DOWNLOADS:-false}
     ports:
       - "8080:8080"
+    volumes:
+      - file_data:/data/files
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 30s
       timeout: 3s
       retries: 3
       start_period: 10s
+
+volumes:
+  file_data:
