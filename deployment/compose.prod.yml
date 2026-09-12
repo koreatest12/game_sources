@@ -9,9 +9,15 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8080
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?ADMIN_TOKEN is required}
+      FILE_STORAGE_DIR: /data/files
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-104857600}
+      FILE_PUBLIC_DOWNLOADS: ${FILE_PUBLIC_DOWNLOADS:-false}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=75}
     expose:
       - "8080"
+    volumes:
+      - file_data:/data/files
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 20s
@@ -56,5 +62,6 @@ networks:
     internal: true
 
 volumes:
+  file_data:
   caddy_data:
   caddy_config:
