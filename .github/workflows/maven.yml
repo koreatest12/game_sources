@@ -47,8 +47,15 @@ jobs:
           FILE_PUBLIC_DOWNLOADS=false
           SSH_PORT=22
           EOF
+          ADMIN_TOKEN=ci-admin-token docker compose config >/tmp/compose.local.yml
+          grep -q 'game-sources-apache' /tmp/compose.local.yml
           docker compose --env-file /tmp/prod.env -f deployment/compose.production.yml config >/tmp/compose.rendered.yml
           grep -q '/data/files' /tmp/compose.rendered.yml
+          grep -q 'game-sources-apache' /tmp/compose.rendered.yml
+
+          docker build -t game-sources-apache:ci deployment/apache
+          docker run --rm game-sources-apache:ci httpd -t
+
           docker run --rm \
             -e DOMAIN=game.example.com \
             -e ACME_EMAIL=ci@example.com \
@@ -98,22 +105,40 @@ jobs:
       - name: Build Docker server image
         run: docker build -t game-sources:ci .
 
-      - name: Run live Docker integration tests
+      - name: Run live Docker + Apache integration tests
         shell: bash
         run: |
           set -euo pipefail
           docker volume create game-sources-ci-files >/dev/null
-          docker run -d --name game-sources-ci -p 18080:8080 \
+          docker network create game-sources-ci-net >/dev/null
+
+          cleanup() {
+            docker rm -f game-sources-apache-ci >/dev/null 2>&1 || true
+            docker rm -f game-sources-ci >/dev/null 2>&1 || true
+            docker network rm game-sources-ci-net >/dev/null 2>&1 || true
+            docker volume rm game-sources-ci-files >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run -d --name game-sources-ci \
+            --network game-sources-ci-net \
+            --network-alias game-server \
             -e ADMIN_TOKEN=ci-admin-token \
             -e MAX_UPLOAD_BYTES=1048576 \
             -v game-sources-ci-files:/data/files \
             game-sources:ci
-          trap 'docker rm -f game-sources-ci >/dev/null 2>&1 || true; docker volume rm game-sources-ci-files >/dev/null 2>&1 || true' EXIT
+
+          docker run -d --name game-sources-apache-ci \
+            --network game-sources-ci-net \
+            -p 18080:8080 \
+            game-sources-apache:ci
 
           healthy=0
           for attempt in {1..60}; do
-            status=$(docker inspect --format='{{.State.Health.Status}}' game-sources-ci 2>/dev/null || true)
-            if [[ "$status" == "healthy" ]] && curl -fsS --connect-timeout 2 http://127.0.0.1:18080/health | grep -q '"status":"UP"'; then
+            app_status=$(docker inspect --format='{{.State.Health.Status}}' game-sources-ci 2>/dev/null || true)
+            apache_status=$(docker inspect --format='{{.State.Health.Status}}' game-sources-apache-ci 2>/dev/null || true)
+            if [[ "$app_status" == "healthy" && "$apache_status" == "healthy" ]] \
+              && curl -fsS --connect-timeout 2 http://127.0.0.1:18080/health | grep -q '"status":"UP"'; then
               healthy=1
               break
             fi
@@ -121,18 +146,24 @@ jobs:
           done
           if [[ "$healthy" != "1" ]]; then
             docker inspect game-sources-ci || true
+            docker inspect game-sources-apache-ci || true
             docker logs game-sources-ci || true
+            docker logs game-sources-apache-ci || true
             exit 1
           fi
 
+          curl -fsSI http://127.0.0.1:18080/health | grep -qi '^Server: Apache'
           curl -fsS http://127.0.0.1:18080/ | grep -q 'Game Sources Arena'
           curl -fsS http://127.0.0.1:18080/transfer.html | grep -q 'Game Sources File Transfer'
           curl -fsS http://127.0.0.1:18080/assets/background.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:18080/static/game.js | grep -q 'startGame'
-          printf 'docker-transfer' >/tmp/docker-transfer.txt
+
+          printf 'apache-docker-transfer' >/tmp/docker-transfer.txt
           curl -fsS -X PUT -H 'Authorization: Bearer ci-admin-token' --data-binary @/tmp/docker-transfer.txt http://127.0.0.1:18080/api/files/docker-transfer.txt | grep -q 'docker-transfer.txt'
-          curl -fsS -H 'Authorization: Bearer ci-admin-token' http://127.0.0.1:18080/files/docker-transfer.txt | grep -q 'docker-transfer'
+          curl -fsS -H 'Authorization: Bearer ci-admin-token' http://127.0.0.1:18080/files/docker-transfer.txt | grep -q 'apache-docker-transfer'
+          test "$(curl -fsS -H 'Authorization: Bearer ci-admin-token' -H 'Range: bytes=0-5' http://127.0.0.1:18080/files/docker-transfer.txt)" = "apache"
           test "$(docker inspect --format='{{.State.Health.Status}}' game-sources-ci)" = "healthy"
+          test "$(docker inspect --format='{{.State.Health.Status}}' game-sources-apache-ci)" = "healthy"
 
       - name: Build downloadable server bundle
         shell: bash
