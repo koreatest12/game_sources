@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>초파리 무한 DOOM ∞</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">ENDLESS ARENA EXPERIMENT</p>
+      <h1>초파리 무한 DOOM ∞</h1>
+      <p class="subtitle">아이템 성장 · 무한 웨이브 · 신경망 + Q-Learning 적응형 AI</p>
+    </div>
+    <div class="controls">
+      <button id="pauseBtn">Ⅱ 일시정지</button>
+      <button id="resetBtn">↻ 새 도전</button>
+      <button id="modeBtn">🤖 자동 플레이</button>
+      <button id="soundBtn">🔇 소리 꺼짐</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="game-panel card">
+      <div class="hud-grid">
+        <div><span>WAVE</span><strong id="wave">01</strong></div>
+        <div><span>HP</span><strong id="hp">100 / 100</strong></div>
+        <div><span>KILLS</span><strong id="kills">0</strong></div>
+        <div><span>GEN</span><strong id="generation">001</strong></div>
+        <div><span>AI Lv.</span><strong id="aiLevel">1</strong></div>
+        <div><span>REWARD</span><strong id="reward">0.0</strong></div>
+      </div>
+      <canvas id="game" width="960" height="540" aria-label="초파리 무한 DOOM 게임 화면"></canvas>
+      <div class="game-footer">
+        <div class="speed-controls">속도
+          <button class="speed active" data-speed="1">1×</button>
+          <button class="speed" data-speed="2">2×</button>
+          <button class="speed" data-speed="4">4×</button>
+        </div>
+        <div>WASD 이동 · ← → 회전 · SPACE 발사 · P 일시정지</div>
+      </div>
+    </section>
+
+    <aside class="sidebar">
+      <section class="card">
+        <h2>🧠 초파리 모티프 신경망</h2>
+        <canvas id="brain" width="420" height="250"></canvas>
+        <div class="stats two-col">
+          <div><span>인공 뉴런</span><strong>24</strong></div>
+          <div><span>가중 연결</span><strong>144</strong></div>
+          <div><span>학습 횟수</span><strong id="learnCount">0</strong></div>
+          <div><span>최근 오차</span><strong id="loss">0.500</strong></div>
+        </div>
+        <p class="note">8개 감각 입력 → 12개 통합 뉴런 → 4개 행동 출력. 행동 점수는 신경망 60% + Q-Learning 40%를 결합합니다.</p>
+      </section>
+
+      <section class="card">
+        <h2>⚡ 획득 장비</h2>
+        <div class="upgrade"><span>공격력</span><strong id="damageStat">1.00×</strong></div>
+        <div class="upgrade"><span>최대 체력</span><strong id="healthStat">100</strong></div>
+        <div class="upgrade"><span>이동 속도</span><strong id="speedStat">1.00×</strong></div>
+        <div class="upgrade"><span>발사 속도</span><strong id="fireStat">4.0/초</strong></div>
+        <p class="note">처치 시 일정 확률로 아이템이 떨어집니다. AI 학습 기억은 LocalStorage에 저장됩니다.</p>
+      </section>
+
+      <section class="card log-card">
+        <h2>LIVE 전투 로그</h2>
+        <ol id="combatLog"></ol>
+      </section>
+    </aside>
+  </main>
+
+  <footer>
+    DOOM에서 영감을 받은 독립 미니게임입니다. 실제 DOOM 엔진이나 실제 초파리 뇌 모델을 사용하지 않습니다.
+  </footer>
+  <script src="game.js"></script>
+</body>
+</html>
