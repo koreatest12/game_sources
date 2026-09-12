@@ -43,9 +43,12 @@ jobs:
           ADMIN_TOKEN=ci-admin-token
           GAME_IMAGE=game-sources:prod
           JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75
+          MAX_UPLOAD_BYTES=1048576
+          FILE_PUBLIC_DOWNLOADS=false
           SSH_PORT=22
           EOF
           docker compose --env-file /tmp/prod.env -f deployment/compose.production.yml config >/tmp/compose.rendered.yml
+          grep -q '/data/files' /tmp/compose.rendered.yml
           docker run --rm \
             -e DOMAIN=game.example.com \
             -e ACME_EMAIL=ci@example.com \
@@ -58,23 +61,38 @@ jobs:
           ADMIN_TOKEN: ci-admin-token
           HOST: 0.0.0.0
           PORT: '8080'
+          FILE_STORAGE_DIR: ${{ runner.temp }}/game-sources-files
+          MAX_UPLOAD_BYTES: '1048576'
+          FILE_PUBLIC_DOWNLOADS: 'false'
         run: |
           set -euo pipefail
+          rm -rf "$FILE_STORAGE_DIR"
           bash scripts/server-start.sh
           trap 'PORT=8080 bash scripts/server-stop.sh || true' EXIT
 
           curl --retry 5 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:8080/ | grep -q 'Game Sources Arena'
+          curl -fsS http://127.0.0.1:8080/transfer.html | grep -q 'Game Sources File Transfer'
           curl -fsS http://127.0.0.1:8080/static/styles.css | grep -q 'game-card'
           curl -fsS http://127.0.0.1:8080/static/game.js | grep -q 'startGame'
+          curl -fsS http://127.0.0.1:8080/static/transfer.js | grep -q 'uploadFile'
           curl -fsS http://127.0.0.1:8080/assets/player.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:8080/assets/enemy.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:8080/assets/gem.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:8080/assets/background.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:8080/health | grep -q '"status":"UP"'
           curl -fsS http://127.0.0.1:8080/ready | grep -q '"status":"UP"'
-          curl -fsS http://127.0.0.1:8080/api/status | grep -q '"status":"running"'
+          curl -fsS http://127.0.0.1:8080/api/status | grep -q '"fileTransfer":true'
           test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/metrics)" = "401"
           curl -fsS -H 'Authorization: Bearer ci-admin-token' http://127.0.0.1:8080/metrics | grep -q '"uptimeSeconds"'
+
+          printf 'file-transfer-ci' > /tmp/transfer-ci.txt
+          test "$(curl -sS -o /tmp/upload.json -w '%{http_code}' -X PUT -H 'Authorization: Bearer ci-admin-token' --data-binary @/tmp/transfer-ci.txt http://127.0.0.1:8080/api/files/transfer-ci.txt)" = "201"
+          grep -q '"sha256"' /tmp/upload.json
+          curl -fsS -H 'Authorization: Bearer ci-admin-token' http://127.0.0.1:8080/api/files | grep -q 'transfer-ci.txt'
+          curl -fsS -H 'Authorization: Bearer ci-admin-token' http://127.0.0.1:8080/files/transfer-ci.txt | grep -q 'file-transfer-ci'
+          test "$(curl -fsS -H 'Authorization: Bearer ci-admin-token' -H 'Range: bytes=0-3' http://127.0.0.1:8080/files/transfer-ci.txt)" = "file"
+          curl -fsS -X DELETE -H 'Authorization: Bearer ci-admin-token' http://127.0.0.1:8080/api/files/transfer-ci.txt | grep -q '"deleted":true'
+          test "$(curl -sS -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer ci-admin-token' http://127.0.0.1:8080/files/transfer-ci.txt)" = "404"
           PORT=8080 bash scripts/server-status.sh
 
       - name: Build Docker server image
@@ -84,8 +102,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker run -d --name game-sources-ci -p 18080:8080 -e ADMIN_TOKEN=ci-admin-token game-sources:ci
-          trap 'docker rm -f game-sources-ci >/dev/null 2>&1 || true' EXIT
+          docker volume create game-sources-ci-files >/dev/null
+          docker run -d --name game-sources-ci -p 18080:8080 \
+            -e ADMIN_TOKEN=ci-admin-token \
+            -e MAX_UPLOAD_BYTES=1048576 \
+            -v game-sources-ci-files:/data/files \
+            game-sources:ci
+          trap 'docker rm -f game-sources-ci >/dev/null 2>&1 || true; docker volume rm game-sources-ci-files >/dev/null 2>&1 || true' EXIT
 
           healthy=0
           for attempt in {1..60}; do
@@ -103,8 +126,12 @@ jobs:
           fi
 
           curl -fsS http://127.0.0.1:18080/ | grep -q 'Game Sources Arena'
+          curl -fsS http://127.0.0.1:18080/transfer.html | grep -q 'Game Sources File Transfer'
           curl -fsS http://127.0.0.1:18080/assets/background.svg | grep -q '<svg'
           curl -fsS http://127.0.0.1:18080/static/game.js | grep -q 'startGame'
+          printf 'docker-transfer' >/tmp/docker-transfer.txt
+          curl -fsS -X PUT -H 'Authorization: Bearer ci-admin-token' --data-binary @/tmp/docker-transfer.txt http://127.0.0.1:18080/api/files/docker-transfer.txt | grep -q 'docker-transfer.txt'
+          curl -fsS -H 'Authorization: Bearer ci-admin-token' http://127.0.0.1:18080/files/docker-transfer.txt | grep -q 'docker-transfer'
           test "$(docker inspect --format='{{.State.Health.Status}}' game-sources-ci)" = "healthy"
 
       - name: Build downloadable server bundle
