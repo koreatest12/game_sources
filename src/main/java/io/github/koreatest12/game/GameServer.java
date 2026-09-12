@@ -49,6 +49,7 @@ public final class GameServer {
 
         server.start();
         System.out.printf("game_sources server started on http://%s:%d%n", host, port);
+        System.out.printf("Astra Fly DOOM: http://%s:%d/astra-fly-doom/%n", host, port);
         System.out.printf("file transfer storage: %s (max upload: %d bytes, public downloads: %s)%n",
                 fileTransferService.storageDirectory(), fileTransferService.maxUploadBytes(), fileTransferService.publicDownloads());
     }
@@ -141,7 +142,9 @@ public final class GameServer {
             if (!requireGet(exchange)) return;
             long uptime = Duration.between(STARTED_AT, Instant.now()).toSeconds();
             String body = "{\"service\":\"game_sources\",\"status\":\"running\",\"startedAt\":\"" + jsonEscape(STARTED_AT.toString())
-                    + "\",\"uptimeSeconds\":" + uptime + ",\"java\":\"" + jsonEscape(System.getProperty("java.version")) + "\",\"fileTransfer\":true}";
+                    + "\",\"uptimeSeconds\":" + uptime
+                    + ",\"java\":\"" + jsonEscape(System.getProperty("java.version"))
+                    + "\",\"fileTransfer\":true,\"astraFlyDoom\":true,\"astraFlyDoomPath\":\"/astra-fly-doom/\"}";
             send(exchange, 200, "application/json; charset=utf-8", body, false);
         }
     }
@@ -164,7 +167,15 @@ public final class GameServer {
         @Override public void handle(HttpExchange exchange) throws IOException {
             if (!requireGet(exchange)) return;
             String requestPath = exchange.getRequestURI().getPath();
-            String resourcePath = "/".equals(requestPath) ? "/index.html" : requestPath;
+            String resourcePath;
+            if ("/".equals(requestPath)) {
+                resourcePath = "/index.html";
+            } else if (requestPath.endsWith("/")) {
+                resourcePath = requestPath + "index.html";
+            } else {
+                resourcePath = requestPath;
+            }
+
             if (resourcePath.contains("..") || resourcePath.contains("\\") || resourcePath.indexOf('\0') >= 0) {
                 send(exchange, 400, "application/json; charset=utf-8", "{\"error\":\"bad_path\"}", false);
                 return;
@@ -175,7 +186,9 @@ public final class GameServer {
                     return;
                 }
                 byte[] bytes = stream.readAllBytes();
-                boolean cache = resourcePath.startsWith("/assets/") || resourcePath.startsWith("/static/");
+                boolean cache = resourcePath.startsWith("/assets/")
+                        || resourcePath.startsWith("/static/")
+                        || (resourcePath.startsWith("/astra-fly-doom/") && !resourcePath.endsWith(".html"));
                 sendBytes(exchange, 200, contentType(resourcePath), bytes, cache);
             }
         }
