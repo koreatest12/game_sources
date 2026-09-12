@@ -137,47 +137,94 @@ jobs:
           cleanup() {
             docker compose down -v --remove-orphans >/dev/null 2>&1 || true
           }
-          trap cleanup EXIT
+
+          diagnostics() {
+            echo '--- docker compose ps ---'
+            docker compose ps || true
+            echo '--- docker compose logs ---'
+            docker compose logs --no-color || true
+          }
+
+          on_exit() {
+            status=$?
+            if [[ "$status" -ne 0 ]]; then
+              diagnostics
+            fi
+            cleanup
+            exit "$status"
+          }
+
+          trap on_exit EXIT
           cleanup
 
-          docker compose up -d --build
+          docker compose up -d --build --wait --wait-timeout 180
 
-          ready=0
-          for attempt in {1..90}; do
-            if curl -fsS --connect-timeout 2 http://127.0.0.1:8080/health | grep -q '"status":"UP"'; then
-              ready=1
-              break
-            fi
-            sleep 2
-          done
-
-          if [[ "$ready" != "1" ]]; then
-            docker compose ps || true
-            docker compose logs --no-color || true
+          app_health="$(docker inspect --format='{{.State.Health.Status}}' game-sources-server 2>/dev/null || true)"
+          apache_health="$(docker inspect --format='{{.State.Health.Status}}' game-sources-apache 2>/dev/null || true)"
+          if [[ "$app_health" != "healthy" || "$apache_health" != "healthy" ]]; then
+            echo "Containers are not healthy: app=$app_health apache=$apache_health" >&2
             exit 1
           fi
 
-          curl -fsSI http://127.0.0.1:8080/health | grep -qi '^Server: Apache'
-          curl -fsS http://127.0.0.1:8080/ | grep -q 'Game Sources Arena'
-          curl -fsS http://127.0.0.1:8080/transfer.html | grep -q 'Game Sources File Transfer'
-          curl -fsS http://127.0.0.1:8080/api/status | grep -q '"fileTransfer":true'
-          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/metrics)" = "401"
-          curl -fsS -H 'Authorization: Bearer release-ci-token' http://127.0.0.1:8080/metrics | grep -q '"uptimeSeconds"'
+          curl_retry=(
+            curl
+            --fail
+            --show-error
+            --silent
+            --retry 10
+            --retry-all-errors
+            --retry-delay 1
+            --connect-timeout 2
+            --max-time 10
+          )
+
+          "${curl_retry[@]}" --head http://127.0.0.1:8080/health | grep -qi '^Server: Apache'
+          "${curl_retry[@]}" http://127.0.0.1:8080/health | grep -q '"status":"UP"'
+          "${curl_retry[@]}" http://127.0.0.1:8080/ | grep -q 'Game Sources Arena'
+          "${curl_retry[@]}" http://127.0.0.1:8080/transfer.html | grep -q 'Game Sources File Transfer'
+          "${curl_retry[@]}" http://127.0.0.1:8080/api/status | grep -q '"fileTransfer":true'
+
+          metrics_code="$(curl \
+            --silent \
+            --show-error \
+            --retry 10 \
+            --retry-all-errors \
+            --retry-delay 1 \
+            --connect-timeout 2 \
+            --max-time 10 \
+            -o /dev/null \
+            -w '%{http_code}' \
+            http://127.0.0.1:8080/metrics)"
+          test "$metrics_code" = "401"
+
+          "${curl_retry[@]}" -H 'Authorization: Bearer release-ci-token' \
+            http://127.0.0.1:8080/metrics | grep -q '"uptimeSeconds"'
 
           printf 'hourly-release-transfer' >/tmp/hourly-release-transfer.txt
-          test "$(curl -sS -o /tmp/release-upload.json -w '%{http_code}' \
+          upload_code="$(curl \
+            --silent \
+            --show-error \
+            --retry 5 \
+            --retry-all-errors \
+            --retry-delay 1 \
+            --connect-timeout 2 \
+            --max-time 20 \
+            -o /tmp/release-upload.json \
+            -w '%{http_code}' \
             -X PUT \
             -H 'Authorization: Bearer release-ci-token' \
             --data-binary @/tmp/hourly-release-transfer.txt \
-            http://127.0.0.1:8080/api/files/hourly-release-transfer.txt)" = "201"
+            http://127.0.0.1:8080/api/files/hourly-release-transfer.txt)"
+          test "$upload_code" = "201"
           grep -q '"sha256"' /tmp/release-upload.json
-          curl -fsS -H 'Authorization: Bearer release-ci-token' \
+
+          "${curl_retry[@]}" -H 'Authorization: Bearer release-ci-token' \
             http://127.0.0.1:8080/files/hourly-release-transfer.txt | grep -q 'hourly-release-transfer'
-          test "$(curl -fsS \
+          test "$("${curl_retry[@]}" \
             -H 'Authorization: Bearer release-ci-token' \
             -H 'Range: bytes=0-5' \
             http://127.0.0.1:8080/files/hourly-release-transfer.txt)" = "hourly"
-          curl -fsS -X DELETE \
+          "${curl_retry[@]}" -X DELETE \
             -H 'Authorization: Bearer release-ci-token' \
             http://127.0.0.1:8080/api/files/hourly-release-transfer.txt | grep -q '"deleted":true'
 
