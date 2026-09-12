@@ -4,23 +4,78 @@ on:
   push:
     tags:
       - 'v*'
+  schedule:
+    - cron: '17 * * * *'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version, for example v1.0.0'
-        required: true
+        description: 'Optional release version, for example v1.1.0. Leave blank for an automatic timestamped prerelease.'
+        required: false
+        default: ''
         type: string
+      prerelease:
+        description: 'Publish a manually supplied version as a prerelease'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
+concurrency:
+  group: build-release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          stamp="$(date -u +'%Y%m%dT%H%MZ')"
+          short_sha="${GITHUB_SHA:0:8}"
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+            if [[ "$version" == *"-hourly."* || "$version" == *"-manual."* ]]; then
+              prerelease=true
+            else
+              prerelease=false
+            fi
+          elif [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
+            version="v0.0.0-hourly.${stamp}.sha${short_sha}"
+            prerelease=true
+          elif [[ -n "${INPUT_VERSION:-}" ]]; then
+            version="$INPUT_VERSION"
+            prerelease="${INPUT_PRERELEASE:-false}"
+          else
+            version="v0.0.0-manual.${stamp}.sha${short_sha}"
+            prerelease=true
+          fi
+
+          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || {
+            echo "Invalid version: $version" >&2
+            exit 2
+          }
+
+          if [[ "$prerelease" != "true" && "$prerelease" != "false" ]]; then
+            prerelease=false
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "Resolved release version: $version (prerelease=$prerelease)"
 
       - name: Set up Java 21 with Maven cache
         uses: actions/setup-java@v5
@@ -30,18 +85,129 @@ jobs:
           cache: maven
           cache-dependency-path: pom.xml
 
+      - name: Warm Maven dependency cache
+        run: sh ./mvnw -B -ntp dependency:go-offline
+
       - name: Build verified JAR
         run: sh ./mvnw -B -ntp clean verify
 
-      - name: Build release bundle
+      - name: Validate deployment and Apache configuration
         shell: bash
         run: |
           set -euo pipefail
+          bash -n scripts/*.sh
+          ruby -e 'require "yaml"; data=YAML.load_file("render.yaml"); abort("render.yaml: services missing") unless data.is_a?(Hash) && data["services"].is_a?(Array) && !data["services"].empty?'
+
+          cat > /tmp/prod.env <<'EOF'
+          DOMAIN=game.example.com
+          ACME_EMAIL=release@example.com
+          ADMIN_TOKEN=release-ci-token
+          GAME_IMAGE=game-sources:prod
+          APACHE_IMAGE=game-sources-apache:prod
+          JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75
+          MAX_UPLOAD_BYTES=1048576
+          FILE_PUBLIC_DOWNLOADS=false
+          SSH_PORT=22
+          EOF
+
+          ADMIN_TOKEN=release-ci-token docker compose config >/tmp/compose.local.yml
+          docker compose --env-file /tmp/prod.env -f deployment/compose.production.yml config >/tmp/compose.production.yml
+          grep -q 'game-sources-apache' /tmp/compose.local.yml
+          grep -q 'game-sources-apache' /tmp/compose.production.yml
+          grep -q '/data/files' /tmp/compose.production.yml
+
+          docker build -t game-sources-apache:release deployment/apache
+          docker run --rm game-sources-apache:release httpd -t
+
+          docker run --rm \
+            -e DOMAIN=game.example.com \
+            -e ACME_EMAIL=release@example.com \
+            -v "$PWD/deployment/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile
+
+      - name: Run full Docker and Apache release smoke tests
+        shell: bash
+        env:
+          ADMIN_TOKEN: release-ci-token
+          MAX_UPLOAD_BYTES: '1048576'
+          FILE_PUBLIC_DOWNLOADS: 'false'
+        run: |
+          set -euo pipefail
+
+          cleanup() {
+            docker compose down -v --remove-orphans >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          cleanup
+
+          docker compose up -d --build
+
+          ready=0
+          for attempt in {1..90}; do
+            if curl -fsS --connect-timeout 2 http://127.0.0.1:8080/health | grep -q '"status":"UP"'; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ "$ready" != "1" ]]; then
+            docker compose ps || true
+            docker compose logs --no-color || true
+            exit 1
+          fi
+
+          curl -fsSI http://127.0.0.1:8080/health | grep -qi '^Server: Apache'
+          curl -fsS http://127.0.0.1:8080/ | grep -q 'Game Sources Arena'
+          curl -fsS http://127.0.0.1:8080/transfer.html | grep -q 'Game Sources File Transfer'
+          curl -fsS http://127.0.0.1:8080/api/status | grep -q '"fileTransfer":true'
+          test "$(curl -sS -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/metrics)" = "401"
+          curl -fsS -H 'Authorization: Bearer release-ci-token' http://127.0.0.1:8080/metrics | grep -q '"uptimeSeconds"'
+
+          printf 'hourly-release-transfer' >/tmp/hourly-release-transfer.txt
+          test "$(curl -sS -o /tmp/release-upload.json -w '%{http_code}' \
+            -X PUT \
+            -H 'Authorization: Bearer release-ci-token' \
+            --data-binary @/tmp/hourly-release-transfer.txt \
+            http://127.0.0.1:8080/api/files/hourly-release-transfer.txt)" = "201"
+          grep -q '"sha256"' /tmp/release-upload.json
+          curl -fsS -H 'Authorization: Bearer release-ci-token' \
+            http://127.0.0.1:8080/files/hourly-release-transfer.txt | grep -q 'hourly-release-transfer'
+          test "$(curl -fsS \
+            -H 'Authorization: Bearer release-ci-token' \
+            -H 'Range: bytes=0-5' \
+            http://127.0.0.1:8080/files/hourly-release-transfer.txt)" = "hourly"
+          curl -fsS -X DELETE \
+            -H 'Authorization: Bearer release-ci-token' \
+            http://127.0.0.1:8080/api/files/hourly-release-transfer.txt | grep -q '"deleted":true'
+
+          test "$(docker inspect --format='{{.State.Health.Status}}' game-sources-server)" = "healthy"
+          test "$(docker inspect --format='{{.State.Health.Status}}' game-sources-apache)" = "healthy"
+
+      - name: Build release bundle
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dist
           mkdir -p dist/game-server
+
+          cat > dist/BUILD-INFO.txt <<EOF
+          version=$RELEASE_VERSION
+          commit=$GITHUB_SHA
+          generated_utc=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+          java=$(java -version 2>&1 | head -n 1)
+          apache_image=httpd:2.4.68-alpine
+          architecture=Caddy->Apache->Java (VPS), Apache->Java (local), Java direct (Render)
+          EOF
+
           cp target/game-sources.jar dist/game-server/
           cp Dockerfile compose.yml render.yaml README.md LICENSE dist/game-server/
           cp -R deployment scripts docs dist/game-server/
+          cp dist/BUILD-INFO.txt dist/game-server/
           chmod +x dist/game-server/scripts/*.sh
+
           tar -C dist -czf dist/game-server-bundle.tar.gz game-server
           cp target/game-sources.jar dist/game-sources.jar
           (cd dist && sha256sum game-server-bundle.tar.gz > game-server-bundle.tar.gz.sha256)
@@ -50,31 +216,47 @@ jobs:
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
-          name: game-sources-release
+          name: game-sources-${{ steps.version.outputs.version }}
           path: |
             dist/game-server-bundle.tar.gz
             dist/game-server-bundle.tar.gz.sha256
             dist/game-sources.jar
             dist/game-sources.jar.sha256
+            dist/BUILD-INFO.txt
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 7
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_VERSION: ${{ inputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
-            VERSION="$GITHUB_REF_NAME"
-          else
-            VERSION="$INPUT_VERSION"
-          fi
-          [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$ ]] || { echo "Invalid version: $VERSION" >&2; exit 2; }
+          assets=(
+            dist/game-server-bundle.tar.gz
+            dist/game-server-bundle.tar.gz.sha256
+            dist/game-sources.jar
+            dist/game-sources.jar.sha256
+            dist/BUILD-INFO.txt
+          )
 
           if gh release view "$VERSION" >/dev/null 2>&1; then
-            gh release upload "$VERSION" dist/game-server-bundle.tar.gz dist/game-server-bundle.tar.gz.sha256 dist/game-sources.jar dist/game-sources.jar.sha256 --clobber
+            gh release upload "$VERSION" "${assets[@]}" --clobber
+            if [[ "$PRERELEASE" == "true" ]]; then
+              gh release edit "$VERSION" --prerelease
+            fi
           else
-            gh release create "$VERSION" dist/game-server-bundle.tar.gz dist/game-server-bundle.tar.gz.sha256 dist/game-sources.jar dist/game-sources.jar.sha256 --target "$GITHUB_SHA" --generate-notes --title "Game Sources $VERSION"
+            args=(
+              release create "$VERSION"
+              "${assets[@]}"
+              --target "$GITHUB_SHA"
+              --generate-notes
+              --title "Game Sources $VERSION"
+            )
+            if [[ "$PRERELEASE" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            gh "${args[@]}"
           fi
