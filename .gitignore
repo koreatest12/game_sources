@@ -23,6 +23,7 @@ id_ed25519*
 
 # Runtime state
 .run/
+data/files/
 
 # Logs and temporary files
 *.log
