@@ -37,7 +37,10 @@
         <label>파일 이름<input id="text-name" type="text" maxlength="180" placeholder="release-note.txt"></label>
         <label class="wide">파일 내용<textarea id="text-content" rows="8" placeholder="서버에서 생성할 텍스트 내용을 입력하세요."></textarea></label>
       </div>
-      <button id="create-text" type="button">텍스트 파일 생성/덮어쓰기</button>
+      <div class="create-actions">
+        <button id="create-text" type="button">텍스트 파일 생성/덮어쓰기</button>
+        <button id="create-download" type="button" class="secondary-action">생성 후 즉시 다운로드</button>
+      </div>
     </section>
 
     <section class="panel">

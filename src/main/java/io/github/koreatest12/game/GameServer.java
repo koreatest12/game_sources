@@ -35,23 +35,28 @@ public final class GameServer {
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         server.setExecutor(executor);
 
-        server.createContext("/health", new HealthHandler());
-        server.createContext("/ready", new HealthHandler());
+        HealthService healthService = HealthService.fromEnvironment(
+                fileTransferService.storageDirectory(), STARTED_AT, GameServer::authorized);
+        healthService.register(server);
         server.createContext("/api/status", new StatusHandler());
         server.createContext("/metrics", new MetricsHandler());
         fileTransferService.register(server);
         server.createContext("/", new StaticResourceHandler());
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            healthService.markShuttingDown();
             server.stop(5);
             executor.shutdown();
         }, "game-server-shutdown"));
 
         server.start();
+        healthService.markStarted();
         System.out.printf("game_sources server started on http://%s:%d%n", host, port);
         System.out.printf("Astra Fly DOOM: http://%s:%d/astra-fly-doom/%n", host, port);
         System.out.printf("file transfer storage: %s (max upload: %d bytes, public downloads: %s)%n",
                 fileTransferService.storageDirectory(), fileTransferService.maxUploadBytes(), fileTransferService.publicDownloads());
+        System.out.printf("health probes: /health/live /health/startup /health/ready (/ready) /health/details (min free disk: %d bytes)%n",
+                healthService.minFreeBytes());
     }
 
     private static String envOrDefault(String name, String defaultValue) {
@@ -69,7 +74,7 @@ public final class GameServer {
         }
     }
 
-    private static boolean requireGet(HttpExchange exchange) throws IOException {
+    static boolean requireGet(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod()) && !"HEAD".equalsIgnoreCase(exchange.getRequestMethod())) {
             exchange.getResponseHeaders().set("Allow", "GET, HEAD");
             send(exchange, 405, "application/json; charset=utf-8", "{\"error\":\"method_not_allowed\"}", false);
@@ -78,7 +83,7 @@ public final class GameServer {
         return true;
     }
 
-    private static boolean authorized(HttpExchange exchange) {
+    static boolean authorized(HttpExchange exchange) {
         if (ADMIN_TOKEN.isBlank()) return true;
         String actual = exchange.getRequestHeaders().getFirst("Authorization");
         String expected = "Bearer " + ADMIN_TOKEN;
@@ -93,7 +98,7 @@ public final class GameServer {
         exchange.getResponseHeaders().set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");
     }
 
-    private static void send(HttpExchange exchange, int status, String contentType, String body, boolean cache) throws IOException {
+    static void send(HttpExchange exchange, int status, String contentType, String body, boolean cache) throws IOException {
         sendBytes(exchange, status, contentType, body.getBytes(StandardCharsets.UTF_8), cache);
     }
 
@@ -112,7 +117,7 @@ public final class GameServer {
         exchange.close();
     }
 
-    private static String jsonEscape(String value) {
+    static String jsonEscape(String value) {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
@@ -128,13 +133,6 @@ public final class GameServer {
         if (lower.endsWith(".ico")) return "image/x-icon";
         if (lower.endsWith(".woff2")) return "font/woff2";
         return "application/octet-stream";
-    }
-
-    private static final class HealthHandler implements HttpHandler {
-        @Override public void handle(HttpExchange exchange) throws IOException {
-            if (!requireGet(exchange)) return;
-            send(exchange, 200, "application/json; charset=utf-8", "{\"status\":\"UP\"}", false);
-        }
     }
 
     private static final class StatusHandler implements HttpHandler {

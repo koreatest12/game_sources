@@ -25,6 +25,9 @@ textarea { resize: vertical; }
 .drop-zone span { color: #94a3b8; }
 .create-grid { display: grid; gap: .8rem; margin: .8rem 0; }
 .create-grid label { display: grid; gap: .4rem; color: #cbd5e1; }
+.create-actions { display: flex; gap: .65rem; flex-wrap: wrap; }
+button.secondary-action { background: #0f766e; }
+button.secondary-action:hover { background: #115e59; }
 .section-title-row { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
 .pill { padding: .35rem .65rem; border-radius: 999px; background: #1e293b; color: #93c5fd; font-weight: 700; }
 .table-wrap { overflow-x: auto; margin-top: 1rem; }

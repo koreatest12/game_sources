@@ -7,8 +7,9 @@ Java 21 + Maven 기반의 **실행 가능한 브라우저 게임 및 파일 전�
 - Java 21 내장 HTTP 서버 + Virtual Threads
 - 브라우저 플레이 게임 **Game Sources Arena**
 - 인증 기반 파일 생성·업로드·목록·다운로드·삭제 및 HTTP Range 다운로드
+- 브라우저에서 텍스트 파일 **생성 후 즉시 다운로드**
 - 플레이어/적/보석/배경/로고 SVG 리소스
-- `/health`, `/ready`, `/api/status`, `/metrics`
+- 세분화 헬스체크: `/health/live`, `/health/startup`, `/health/ready`(`/ready`), `/health/details` + `/api/status`, `/metrics`
 - `ADMIN_TOKEN` Bearer 인증 기반 관리 API 보호
 - **Apache HTTP Server 2.4.68 Alpine reverse proxy**
 - Maven 3.9.16 Wrapper + Maven dependency cache
@@ -56,6 +57,7 @@ Java 21 + Maven 기반의 **실행 가능한 브라우저 게임 및 파일 전�
 │  └─ verify-production.sh
 ├─ src/main/java/io/github/koreatest12/game/GameServer.java
 ├─ src/main/java/io/github/koreatest12/game/FileTransferService.java
+├─ src/main/java/io/github/koreatest12/game/HealthService.java
 ├─ src/main/resources/
 ├─ Dockerfile
 ├─ compose.yml
@@ -104,6 +106,26 @@ bash scripts/server-stop.sh
 
 이 방식으로 서버가 뜨기 전에 `curl 127.0.0.1:8080`이 먼저 실행되는 race condition을 방지합니다.
 
+## Health probes
+
+| 경로 | 프로브 | 판단 기준 | 실패 시 | 인증 |
+|---|---|---|---|---|
+| `/health`, `/health/live` | Liveness | 프로세스가 HTTP 요청에 응답 | 응답 없음(재시작 대상) | 없음 |
+| `/health/startup` | Startup | 리스너 기동 완료 | 503 | 없음 |
+| `/ready`, `/health/ready` | Readiness | 기동 완료 · 종료 중 아님 · 저장소 쓰기 가능 · 디스크 여유 ≥ `HEALTH_MIN_FREE_BYTES` | 503 (트래픽 차단 대상) | 없음 |
+| `/health/details` | Details | Readiness 전체 항목 상세 + JVM 힙·스레드·가동시간 | 503 / 미인증 401 | `ADMIN_TOKEN` |
+
+- Liveness에는 저장소·디스크 같은 외부 의존성을 넣지 않습니다.
+- 공개 프로브는 항목별 `UP`/`DOWN`만 보여주고, 디스크 용량·저장 경로 같은 내부 정보는 인증된 `/health/details`에서만 노출합니다.
+- 종료 신호를 받으면 Readiness가 먼저 `DOWN`으로 바뀐 뒤 서버가 정지합니다.
+- `HEALTH_MIN_FREE_BYTES` 기본값은 `67108864`(64 MiB)입니다.
+- 기존 `/health`, `/ready` 경로와 `"status":"UP"` 응답은 유지됩니다.
+
+```bash
+curl -s http://localhost:8080/health/ready
+curl -s -H "Authorization: Bearer $ADMIN_TOKEN" http://localhost:8080/health/details
+```
+
 ## Docker + Apache run
 
 Linux/macOS:
@@ -131,8 +153,10 @@ curl.exe -i http://localhost:8080/health
 |---|---|---|
 | `/` | Playable Game Sources Arena | Public |
 | `/transfer.html` | Browser file transfer console | UI uses Bearer token for management API |
-| `/health` | Liveness | Public |
-| `/ready` | Readiness | Public |
+| `/health`, `/health/live` | Liveness | Public |
+| `/health/startup` | Startup probe | Public |
+| `/ready`, `/health/ready` | Readiness | Public |
+| `/health/details` | Detailed health/JVM status | Bearer token |
 | `/api/status` | Runtime status | Public |
 | `/api/files` | File list | Bearer token |
 | `/api/files/{name}` | Metadata/upload/delete | Bearer token |
@@ -153,7 +177,7 @@ before verification so dependencies/plugins are populated and reused.
 
 ## CI runs the real server
 
-`.github/workflows/maven.yml` performs Maven cache warm-up, `mvn verify`, Render/VPS configuration validation, Apache image build and `httpd -t` validation, real JAR startup, Docker Java + Apache proxy startup, game/API/resource/auth/file-transfer/Range tests, Docker health tests, and downloadable bundle generation.
+`.github/workflows/maven.yml` performs Maven cache warm-up, `mvn verify`, Render/VPS configuration validation, Apache image build and `httpd -t` validation, real JAR startup, Docker Java + Apache proxy startup, game/API/resource/auth/file-transfer/Range tests, text-file create-and-download UI checks, detailed health probe tests, Docker health tests, and downloadable bundle generation.
 
 ## Actual hosted server without PROD_HOST — Render
 
