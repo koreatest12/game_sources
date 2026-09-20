@@ -12,6 +12,7 @@
   const textName = document.querySelector('#text-name');
   const textContent = document.querySelector('#text-content');
   const createTextButton = document.querySelector('#create-text');
+  const createDownloadButton = document.querySelector('#create-download');
   let chosenFile = null;
 
   const token = () => tokenInput.value.trim();
@@ -96,29 +97,39 @@
     } catch (error) { setStatus(`업로드 실패: ${error.message}`, 'error'); }
   }
 
-  async function createTextFile() {
+  async function createTextFile(downloadAfterCreate = false) {
     const name = textName.value.trim();
     if (!name) { setStatus('텍스트 파일 이름을 입력하세요.', 'error'); return; }
     try {
       setStatus(`${name} 생성 중…`);
       await api(`/api/files/${encodeURIComponent(name)}`, { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: new Blob([textContent.value], { type: 'text/plain;charset=utf-8' }) });
-      setStatus(`${name} 생성 완료`, 'success');
+      if (downloadAfterCreate) {
+        await downloadByName(name);
+      }
       await refreshFiles();
+      setStatus(downloadAfterCreate ? `${name} 생성 및 다운로드 완료` : `${name} 생성 완료`, 'success');
     } catch (error) { setStatus(`파일 생성 실패: ${error.message}`, 'error'); }
+  }
+
+  async function downloadByName(name) {
+    setStatus(`${name} 다운로드 준비 중…`);
+    const blob = await (await api(`/files/${encodeURIComponent(name)}`)).blob();
+    const url = URL.createObjectURL(blob);
+    try {
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = name;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   }
 
   async function downloadFile(file) {
     try {
-      setStatus(`${file.name} 다운로드 준비 중…`);
-      const blob = await (await api(file.downloadUrl)).blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = file.name;
-      document.body.append(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
+      await downloadByName(file.name);
       setStatus(`${file.name} 다운로드 시작`, 'success');
     } catch (error) { setStatus(`다운로드 실패: ${error.message}`, 'error'); }
   }
@@ -140,7 +151,8 @@
   fileInput.addEventListener('change', () => choose(fileInput.files[0]));
   uploadButton.addEventListener('click', () => uploadFile(chosenFile));
   refreshButton.addEventListener('click', refreshFiles);
-  createTextButton.addEventListener('click', createTextFile);
+  createTextButton.addEventListener('click', () => createTextFile(false));
+  createDownloadButton.addEventListener('click', () => createTextFile(true));
   ['dragenter', 'dragover'].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.add('dragging'); }));
   ['dragleave', 'drop'].forEach(type => dropZone.addEventListener(type, event => { event.preventDefault(); dropZone.classList.remove('dragging'); }));
   dropZone.addEventListener('drop', event => choose(event.dataTransfer.files[0]));
