@@ -78,7 +78,7 @@ jobs:
           echo "Resolved release version: $version (prerelease=$prerelease)"
 
       - name: Set up Java 21 with Maven cache
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
