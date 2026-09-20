@@ -19,5 +19,5 @@ services:
         generateValue: true
       - key: JAVA_TOOL_OPTIONS
         value: -XX:MaxRAMPercentage=75 -XX:+ExitOnOutOfMemoryError
-
-HEALTH_MIN_FREE_BYTES=67108864
+      - key: HEALTH_MIN_FREE_BYTES
+        value: "67108864"
