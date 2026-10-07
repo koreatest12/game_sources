@@ -1,4 +1,4 @@
-FROM httpd:2.4.68-alpine
+FROM httpd:2.4.69-alpine
 
 RUN sed -i \
     -e 's/^Listen 80$/Listen 8080/' \
